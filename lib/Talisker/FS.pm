@@ -10,9 +10,14 @@ use Talisker;
 use Talisker::FS::Path::Root;
 
 my @FUSE_METHODS = qw(
-    getattr readlink getdir
-    open    read     release
-    statfs  flush
+    getattr  readlink  getdir
+    open     read      release
+    statfs   flush     mknod
+    create   mknod     mkdir
+    unlink   rmdir     symlink
+    rename   link      chmod
+    chown    truncate  utime
+    write    fsync
 );
 
 with 'MooseX::Runnable';
@@ -47,25 +52,18 @@ has talisker => (
     lazy    => 1,
 );
 
-has th => (
-    is      => 'ro',
-    isa     => 'Talisker::Handle',
-    default => sub { shift->talisker->handle },
-);
-
-has dirs => (
-    accessor => 'dirs',
-    isa => 'HashRef',
-    lazy_build => 1,
-);
-
 has root => (
     accessor => 'root',
     isa      => 'Object',
     handles  => \@FUSE_METHODS,
-    default  => sub { Talisker::FS::Path::Root->new(th => shift->th) },
-    lazy     => 1,
+    lazy_build => 1,
 );
+
+sub _build_root {
+    my ($self) = @_;
+
+    return Talisker::FS::Path::Root->new(talisker => $self->talisker);
+}
 
 sub run {
     my ($self) = @_;

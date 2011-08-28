@@ -8,132 +8,196 @@ use POSIX qw(ENOENT);
 
 with 'Talisker::FS::Path::Role';
 
-sub name { 'ts' }
-
 sub getattr {
-    my ($self, $path) = @_;
-    my $file = to_File($path);
+    my ( $self, $path ) = @_;
 
-    return $self->_getattr_dir         if $path eq '/ts';
-    return $self->_getattr_file($path) if $self->_tag_exists($file->basename);
+    my @path = split m{/}, $path;
+
+    return $self->_getattr_top         if @path == 2; # ex: /ts
+    return $self->_getattr_dir($path)  if @path == 3; # ex: /ts/foo
+    return $self->_getattr_file($path) if @path == 4; # ex: /ts/foo/foo.csv
+
     return -ENOENT();
 }
 
-sub _tag_exists {
-    my ($self, $tag) = @_;
-
-    my $cv = AE::cv;
-    $self->th->exists(
-        tag => $tag,
-        cb  => sub { $cv->send(@_) },
-    );
-    my ($exists, $err) = $cv->recv;
-
-    confess $err if $err;
-
-    return $exists;
-}
-
-sub _getattr_file {
-    my ($self, $path) = @_;
+# /ts
+sub _getattr_top {
+    my ( $self, $path ) = @_;
     my $file = to_File($path);
 
-    my $tag = $file->basename;
+    return $self->getattr_dir;
+}
 
-    my $cv = AE::cv;
-    $self->th->ts_meta(
-        tag => $tag,
-        cb  => sub { $cv->send(@_) },
+# /ts/<some ts>
+sub _getattr_dir {
+    my ( $self, $path ) = @_;
+    my $file = to_File($path);
+
+    my $tag     = $file->basename;
+    my $ts_meta = $self->_ts_meta($tag);
+
+    return -ENOENT() if !defined $ts_meta;
+
+    return $self->getattr_dir(
+        mtime => $ts_meta->{mtime}
     );
-    my ($ts_meta, $err) = $cv->recv;
+}
 
-    my $mode = 0644;
-    $mode += 0100 << 9;
+# /ts/<some ts>/<some file>
+sub _getattr_file {
+    my ( $self, $path ) = @_;
+    my $file = to_File($path);
 
-    return (
-        1,                 # dev
-        0,                 # ino
-        $mode,             # mode
-        1,                 # nlink
-        0,                 # uid
-        0,                 # gid
-        0,                 # rdev
-        0,                 # size
-        1,                 # atime
-        $ts_meta->{mtime}, # mtime
-        1,                 # ctime
-        1024,              # blksize
-        0,                 # blocks
+    my ($tag, $extension) = split /\./, $file->basename;
+    my $ts_meta = $self->_ts_meta($tag);
+
+    return -ENOENT() if !defined $ts_meta;
+
+    my $fields = $self->_fields;
+
+    # todo make this extension based
+    my $size   = length $self->_ts_csv($tag);
+
+    return $self->getattr_file(
+        mtime => $ts_meta->{mtime},
+        size  => $size,
     );
 }
 
 sub read {
-    my ($self, $path, $size, $offset) = @_;
+    my ( $self, $path, $size, $offset ) = @_;
     my $file = to_File($path);
 
-    my $tag    = $file->basename;
-    my $ts_csv = $self->_ts_csv($tag);
+    my ($tag, $extension) = split /\./, $file->basename;
 
-    return '' if $offset > 0;
+    my $content_method = "_read_${extension}";
+
+    return $self->$content_method($tag, $path, $size, $offset);
+}
+
+sub _read_csv {
+    my ($self, $tag, $path, $size, $offset) = @_;
+
+    my $ts_csv = $self->_ts_csv($tag);
 
     return substr $ts_csv, $offset, $size;
 }
 
 sub _ts_csv {
-    my ($self, $tag) = @_;
+    my ( $self, $tag ) = @_;
 
     my $ts     = $self->_ts($tag);
     my $fields = $self->_fields;
 
-    my @fnames = map { $_->{name} } @{ $fields };
+    my @fnames = map { $_->{name} } @{$fields};
     my $header = join ',', qw(tag stamp), @fnames;
-    my @lines  = ($header);
 
-    for my $pt (@{ $ts->{points}}) {
-        my @cells = ($tag, $pt->{stamp}, map { $pt->{$_} // '' } @fnames);
+    # my @lines  = ($header);
+    my @lines = ();
+
+    for my $pt ( @{ $ts->{points} } ) {
+        my @cells = ( $tag, $pt->{stamp}, map { $pt->{$_} // '' } @fnames );
         push @lines, join ',', @cells;
     }
 
-    return join("\n", @lines) . "\n";
+    return join( "\n", @lines ) . "\n";
 }
 
-sub _fields {
-    my ($self) = @_;
-
-    my $cv = AE::cv;
-    $self->th->read_fields( cb => sub { $cv->send(@_) } );
-    my ($fields, $err) = $cv->recv;
-
-    confess $err if $err;
-
-    return $fields;
-}
+# sub _ts_prn {
+#     my ( $self, $tag ) = @_;
+#
+#     my $ts     = $self->_ts($tag);
+#     my $fields = $self->_fields;
+#
+#     my @fnames = map { $_->{name} } @{$fields};
+#     my $header = join ',', qw(tag stamp), @fnames;
+#
+#     # my @lines  = ($header);
+#     my @lines = ();
+#
+#     for my $pt ( @{ $ts->{points} } ) {
+#
+#         push @lines,
+#           join '',
+#           map { _pad($_) } $tag,
+#           $pt->{stamp},
+#           map { $pt->{$_} } @fnames;
+#     }
+#
+#     return join( "\r\n", @lines ) . "\r\n";
+# }
+#
+# sub _pad {
+#     my ( $txt, $width ) = @_;
+#
+#     $width //= 20;
+#
+#     return sprintf "%-${width}s", $txt // '';
+# }
 
 sub _ts {
-    my ($self, $tag) = @_;
+    my ( $self, $tag ) = @_;
 
     my $cv = AE::cv;
-    $self->th->read(
+    $self->talisker->read(
         tag => $tag,
         cb  => sub { $cv->send(@_) },
     );
-    my ($ts, $err) = $cv->recv;
+    my ( $ts, $err ) = $cv->recv;
 
     confess $err if $err;
 
     return $ts;
 }
 
-sub getdir {
-    my ($self, $path) = @_;
+sub _ts_meta {
+    my ( $self, $tag ) = @_;
 
     my $cv = AE::cv;
-    $self->th->tags(cb => sub { $cv->send(@_) } );
-    my ($tags, $err) = $cv->recv;
+
+    $self->talisker->ts_meta(
+        tag => $tag,
+        cb  => sub { $cv->send(@_) },
+    );
+
+    my ( $ts_meta, $err ) = $cv->recv;
 
     confess $err if $err;
 
-    return '.', @{ $tags }, 0;
+    return if keys(%{ $ts_meta }) == 0;
+    return $ts_meta;
+}
+
+sub _tag_exists {
+    my ( $self, $path ) = @_;
+
+    my $file = to_File($path);
+    my ($tag) = split /\./, $file->basename;
+
+    my $cv = AE::cv;
+    $self->talisker->exists(
+        tag => $tag,
+        cb  => sub { $cv->send(@_) },
+    );
+    my ( $exists, $err ) = $cv->recv;
+
+    confess $err if $err;
+
+    return $exists;
+}
+
+sub getdir {
+    my ( $self, $path ) = @_;
+
+    my @path = split m{/}, $path;
+
+    return ('.', 0) if @path == 2; # /ts
+
+    my $tag  = $path[-1];
+
+    return -ENOENT() if !$self->_tag_exists($tag);
+
+    return ('.', "${tag}.csv", 0); # /ts/<some ts>
 }
 
 __PACKAGE__->meta->make_immutable;

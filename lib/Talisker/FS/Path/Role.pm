@@ -3,62 +3,24 @@ package Talisker::FS::Path::Role;
 use Moose::Role;
 use namespace::autoclean;
 use MooseX::Types::Path::Class qw(File Dir);
+use AnyEvent;
 
-requires qw(
-    name
-);
-
-has th => (
+has talisker => (
     is       => 'ro',
-    isa      => 'Talisker::Handle',
+    isa      => 'Talisker',
     required => 1,
 );
 
-sub _getattr_dir {
+has name => (
+    accessor => 'name',
+    isa => 'Str',
+    lazy_build => 1,
+);
 
-    my $mode = 0644;
-    $mode += 0040 << 9;
-    $mode += 0111;
-
-    return (
-        1,     # dev
-        0,     # ino
-        $mode, # mode
-        1,     # nlink
-        0,     # uid
-        0,     # gid
-        0,     # rdev
-        0,     # size
-        1,     # atime
-        1,     # mtime
-        1,     # ctime
-        1024,  # blksize
-        1,     # blocks
-    );
-
-}
-
-sub _getattr_file {
+sub _build_name {
     my ($self) = @_;
-
-    my $mode = 0644;
-    $mode += 0100 << 9;
-
-    return (
-        1,     # dev
-        0,     # ino
-        $mode, # mode
-        1,     # nlink
-        0,     # uid
-        0,     # gid
-        0,     # rdev
-        0,     # size
-        1,     # atime
-        0,     # mtime
-        1,     # ctime
-        1024,  # blksize
-        0,     # blocks
-    );
+    my @pkg = split /::/, $self->meta->name;
+    return lc pop @pkg;
 }
 
 sub read {
@@ -111,6 +73,117 @@ sub release {
     my $fh    = shift;
 
     return 0;
+}
+
+sub mknod {
+    return 0;
+}
+
+sub create {
+    return 0;
+}
+
+sub setattr {
+    return 0;
+}
+
+sub mkdir {
+    return 0;
+}
+
+sub unlink {
+    return 0;
+}
+
+sub rmdir {
+    return 0;
+}
+
+sub symlink {
+    return 0;
+}
+
+sub rename {
+    return 0;
+}
+
+sub link {
+    return 0;
+}
+
+sub chmod {
+    return 0;
+}
+
+sub chown {
+    return 0;
+}
+
+sub truncate {
+    return 0;
+}
+
+sub utime {
+    return 0;
+}
+
+sub write {
+    return 0;
+}
+
+sub fsync {
+    return 0;
+}
+
+sub _fields {
+    my ($self) = @_;
+
+    my $cv = AE::cv;
+    $self->talisker->read_fields( cb => sub { $cv->send(@_) } );
+    my ( $fields, $err ) = $cv->recv;
+
+    confess $err if $err;
+
+    return $fields;
+}
+
+sub getattr_file {
+    my ($self, %attr) = @_;
+
+    my $mode = 0644;
+    $mode += 0100 << 9;
+
+    return $self->_getattr(mode => $mode, %attr);
+}
+
+sub getattr_dir {
+    my ($self, %attr) = @_;
+
+    my $mode = 0644;
+    $mode += 0040 << 9;
+    $mode += 0111;
+
+    return $self->_getattr(mode => $mode, %attr);
+}
+
+sub _getattr {
+    my ($self, %attr) = @_;
+
+    return (
+        $attr{dev}     // 1,
+        $attr{ino}     // 0,
+        $attr{mode}    // 33188,
+        $attr{nlink}   // 1,
+        $attr{uid}     // 0,
+        $attr{gid}     // 0,
+        $attr{rdev}    // 0,
+        $attr{size}    // 0,
+        $attr{atime}   // 0,
+        $attr{mtime}   // 0,
+        $attr{ctime}   // 0,
+        $attr{blksize} // 1024,
+        $attr{blocks}  // 1,
+    );
 }
 
 1;

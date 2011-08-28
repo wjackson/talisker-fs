@@ -27,15 +27,59 @@ sub _build_file_map {
     return { map { $_ => 1 } @INFO_FILES };
 }
 
-sub name { 'info' }
-
 sub getattr {
     my ($self, $path) = @_;
     my $file = to_File($path);
 
-    return $self->_getattr_dir  if $path eq '/info';
-    return $self->_getattr_file if exists $self->file_map->{$file->basename};
-    return -ENOENT();
+    my $name = $self->name;
+
+    return $self->getattr_dir  if $path eq "/$name";
+
+    return -ENOENT() if !exists $self->file_map->{$file->basename};
+
+    return $self->_dispatch('getattr', $path);
+}
+
+sub _getattr_redis {
+    my ($self, $path) = @_;
+
+    my $size = length $self->_redis_info_txt;
+    my $t    = time;
+
+    return $self->getattr_file(
+        size  => $size,
+        atime => $t,
+        mtime => $t,
+        ctime => $t,
+    );
+}
+
+sub _getattr_fields {
+    my ($self, $path) = @_;
+
+    my $size = length $self->_fields_txt;
+    my $t    = time;
+
+    return $self->getattr_file(
+        size  => $size,
+        atime => $t,
+        mtime => $t,
+        ctime => $t,
+    );
+}
+
+sub _getattr_tags {
+    my ($self, $path) = @_;
+
+    my $size = length $self->_tags_txt;
+    my $t    = time;
+
+    return $self->getattr_file(
+        size  => $size,
+        atime => $t,
+        mtime => $t,
+        ctime => $t,
+    );
 }
 
 sub getdir {
@@ -51,38 +95,53 @@ sub read {
 sub _read_redis {
     my ($self, $path, $size, $offset) = @_;
 
+    return substr $self->_redis_info_txt, $offset, $size;
+}
+
+sub _redis_info_txt {
+    my ($self) = @_;
+
     my $cv = AE::cv;
-    $self->th->redis->command(['INFO'], sub { $cv->send(@_) });
+    $self->talisker->redis->command(['INFO'], sub { $cv->send(@_) });
     my ($info, $err) = $cv->recv;
 
     confess $err if $err;
 
-    return substr $info, $offset, $size;
+    return $info;
 }
 
 sub _read_fields {
     my ($self, $path, $size, $offset) = @_;
 
-    my $cv = AE::cv;
-    $self->th->read_fields( cb => sub { $cv->send(@_) } );
-    my ($fields, $err) = $cv->recv;
+    return substr $self->_fields_txt, $offset, $size;
+}
 
-    confess $err if $err;
+sub _fields_txt {
+    my ($self) = @_;
 
-    return substr to_json($fields, { pretty => 1 }), $offset, $size;
+    my $fields = $self->_fields;
+
+    return to_json($fields, { pretty => 1 });
 }
 
 sub _read_tags {
     my ($self, $path, $size, $offset) = @_;
 
+    return substr $self->_tags_txt, $offset, $size;
+}
+
+sub _tags_txt {
+    my ($self) = @_;
+
     my $cv = AE::cv;
-    $self->th->tags( cb => sub { $cv->send(@_) } );
+    $self->talisker->tags( cb => sub { $cv->send(@_) } );
     my ($tags, $err) = $cv->recv;
 
     confess $err if $err;
 
-    my $tags_str = join("\n", @{ $tags }) . "\n";
-    return substr $tags_str, $offset, $size;
+    my $tags_str = join '', map { "$_\n" } @{ $tags };
+
+    return $tags_str;
 }
 
 sub _dispatch {

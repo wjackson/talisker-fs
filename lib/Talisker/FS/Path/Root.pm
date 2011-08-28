@@ -6,22 +6,30 @@ use MooseX::Types::Path::Class qw(File Dir);
 use POSIX qw(ENOENT);
 
 use Talisker::FS::Path::Info;
+use Talisker::FS::Path::IO;
 use Talisker::FS::Path::TS;
 
 with 'Talisker::FS::Path::Role';
 
+# /info
 has info => (
-    accessor => 'info',
-    isa      => 'Object',
-    default  => sub { Talisker::FS::Path::Info->new( th => shift->th ) },
-    lazy     => 1,
+    accessor   => 'info',
+    does       => 'Talisker::FS::Path::Role',
+    lazy_build => 1,
 );
 
+# /ts
 has ts => (
-    accessor => 'ts',
-    isa      => 'Object',
-    default  => sub { Talisker::FS::Path::TS->new( th => shift->th ) },
-    lazy     => 1,
+    accessor   => 'ts',
+    does       => 'Talisker::FS::Path::Role',
+    lazy_build => 1,
+);
+
+# /io
+has io => (
+    accessor   => 'io',
+    does       => 'Talisker::FS::Path::Role',
+    lazy_build => 1,
 );
 
 has subdirs => (
@@ -36,12 +44,25 @@ has subdir_map => (
     lazy_build => 1,
 );
 
-sub name { '' }
+sub _build_info {
+    my ($self) = @_;
+    return Talisker::FS::Path::Info->new( talisker => $self->talisker );
+}
+
+sub _build_ts {
+    my ($self) = @_;
+    return Talisker::FS::Path::TS->new( talisker => $self->talisker );
+}
+
+sub _build_io {
+    my ($self) = @_;
+    return Talisker::FS::Path::IO->new( talisker => $self->talisker );
+}
 
 sub _build_subdirs {
     my ($self) = @_;
 
-    return [ $self->info, $self->ts ];
+    return [ $self->info, $self->io, $self->ts ];
 }
 
 sub _build_subdir_map {
@@ -53,7 +74,7 @@ sub _build_subdir_map {
 sub getattr {
     my ($self, $path) = @_;
 
-    return $self->_getattr_dir if $path eq '/';
+    return $self->getattr_dir if $path eq '/';
 
     $self->_dispatch('getattr', $path);
 }
@@ -62,10 +83,31 @@ sub getdir {
     my ($self, $path) = @_;
 
     # handle '/'
-    return '.', ( map { $_->name } @{ $self->subdirs } ), 0 if $path eq '/';
+    return '.', ( map { $_->name } @{ $self->subdirs } ), 0
+        if $path eq '/';
 
-    # dispatch everything else
+    # dispatch everything else to the right subdir
     return $self->_dispatch('getdir', $path);
+}
+
+sub open {
+    my ($self, $path, @args) = @_;
+    $self->_dispatch('open', $path, @args);
+}
+
+sub read {
+    my ($self, $path, @args) = @_;
+    $self->_dispatch('read', $path, @args);
+}
+
+sub write {
+    my ($self, $path, @args) = @_;
+    $self->_dispatch('write', $path, @args);
+}
+
+sub close {
+    my ($self, $path, @args) = @_;
+    $self->_dispatch('close', $path, @args);
 }
 
 sub _dispatch {
@@ -75,11 +117,6 @@ sub _dispatch {
 
     return -ENOENT() if !defined $subdir;
     return $subdir->$method($path, @args);
-}
-
-sub read {
-    my ($self, $path, @args) = @_;
-    $self->_dispatch('read', $path, @args);
 }
 
 sub _pick_subdir {
